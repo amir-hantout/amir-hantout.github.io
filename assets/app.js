@@ -38,7 +38,7 @@
     }).observe(bandeau);
     /* Sur téléphone, l'avatar attend la fin de l'en-tête pour ne pas couvrir les chiffres. */
     new IntersectionObserver(function (e) { document.body.classList.toggle('haut', e[0].isIntersecting); },
-      { threshold: 0, rootMargin: '0px 0px -55% 0px' }).observe(bandeau.querySelector('.chiffres'));
+      { threshold: 0 }).observe(bandeau.querySelector('.chiffres'));
     new IntersectionObserver(function (e) { barre.classList.toggle('solide', !e[0].isIntersecting); },
       { rootMargin: '-64px 0px 0px 0px', threshold: 0 }).observe(document.querySelector('.bandeau h1'));
   }
@@ -48,7 +48,7 @@
   var courant = rail && rail.querySelector('.courant');
   var jalons = Array.prototype.slice.call(document.querySelectorAll('.jalon'));
   var liens = Array.prototype.slice.call(document.querySelectorAll('.liens-nav a'));
-  var attente = false;
+  var attente = false, dernierLien = null;
   function majRail() {
     attente = false;
     var repere = window.innerHeight * 0.45;
@@ -64,10 +64,15 @@
       if (passe) actif = j.closest('section');
     });
     var horsMain = document.getElementById('contact').getBoundingClientRect().top < repere;
-    liens.forEach(function (a) {
-      var cible = horsMain ? 'contact' : (actif ? actif.id : '');
-      a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + cible));
-    });
+    var cibleId = horsMain ? 'contact' : (actif ? actif.id : '');
+    liens.forEach(function (a) { a.setAttribute('aria-current', String(a.getAttribute('href') === '#' + cibleId)); });
+    /* Menu en bande défilante (téléphone) : le lien de la section lue reste visible, au centre. */
+    var bande = document.querySelector('.liens-nav');
+    if (bande && cibleId !== dernierLien && bande.scrollWidth > bande.clientWidth) {
+      dernierLien = cibleId;
+      var lienActif = bande.querySelector('a[aria-current="true"]');
+      if (lienActif) bande.scrollTo({ left: lienActif.offsetLeft - (bande.clientWidth - lienActif.offsetWidth) / 2, behavior: 'smooth' });
+    }
   }
   function demander() { if (!attente) { attente = true; requestAnimationFrame(majRail); } }
   window.addEventListener('scroll', demander, { passive: true });
@@ -124,9 +129,12 @@
     });
     var x0 = null;
     var cadre = document.getElementById('zoom-cadre');
-    cadre.addEventListener('pointerdown', function (e) { x0 = e.clientX; });
+    var doigts = 0, zoomee = function () { return window.visualViewport && window.visualViewport.scale > 1.05; };
+    cadre.addEventListener('pointerdown', function (e) { doigts++; x0 = doigts === 1 && !zoomee() ? e.clientX : null; });
+    cadre.addEventListener('pointercancel', function () { doigts = Math.max(0, doigts - 1); x0 = null; });
     cadre.addEventListener('pointerup', function (e) {
-      if (x0 === null || vues.length < 2) return;
+      doigts = Math.max(0, doigts - 1);
+      if (x0 === null || vues.length < 2 || zoomee()) { x0 = null; return; }
       var dx = e.clientX - x0; x0 = null;
       if (Math.abs(dx) > 45) afficher(indice + (dx < 0 ? 1 : -1));
     });
@@ -134,31 +142,101 @@
     zoom.addEventListener('click', function (e) { if (e.target === zoom) zoom.close(); });
   }
 
-  /* ── Avatar : bulle de BD au survol ou au focus d'un projet ou d'un agent ── */
+  /* ── Avatar : bulle de BD ──
+     Souris : au survol (ou au focus clavier) d'un projet ou d'un agent.
+     Écran tactile (pas de survol) : l'avatar commente de lui-même la carte qui passe au centre de l'écran,
+     un toucher sur une carte (hors capture) ou sur l'avatar relance le commentaire ; la bulle reste le temps
+     de lire (selon la longueur du texte), avec une jauge de temps, et se ferme d'un toucher. */
   var avatar = document.getElementById('avatar'), bulle = document.getElementById('bulle');
   var texte = document.getElementById('bulle-texte'), img = document.getElementById('avatar-img');
+  var jauge = document.getElementById('bulle-temps'), croix = document.getElementById('bulle-x');
   if (avatar && bulle && texte && img) {
+    var tactile = window.matchMedia('(hover: none)').matches;
+    if (tactile) document.body.classList.add('tactile');
     ['idle', 'wow', 'point', 'sigh'].forEach(function (h) { var p = new Image(); p.src = 'assets/avatar/' + h + '.png'; });
-    var minuterie = null, courantEl = null;
+    var minuterie = null, courantEl = null, vus = [], fermes = 0;
     var langue = function () { return racine.getAttribute('lang') === 'en' ? 'en' : 'fr'; };
-    var cacher = function () { bulle.hidden = true; avatar.classList.remove('parle'); img.src = 'assets/avatar/idle.png'; courantEl = null; };
+    var cacher = function () { clearTimeout(minuterie); bulle.hidden = true; avatar.classList.remove('parle'); img.src = 'assets/avatar/idle.png'; courantEl = null; };
     var montrer = function (msg, humeur, duree) {
       clearTimeout(minuterie);
       texte.textContent = msg;
       img.src = 'assets/avatar/' + (humeur || 'idle') + '.png';
       bulle.hidden = false; avatar.classList.add('parle');
+      if (jauge) { jauge.style.animation = 'none'; void jauge.offsetWidth; jauge.style.animation = ''; jauge.style.animationDuration = duree + 'ms'; }
       if (duree) minuterie = setTimeout(cacher, duree);
     };
-    document.querySelectorAll('[data-bulle]').forEach(function (el) {
-      var sur = function () { courantEl = el; montrer(el.getAttribute('data-' + langue()), el.getAttribute('data-mood'), 9000); };
+    /* Durée de lecture au toucher : 4,5 s + 70 ms par caractère, entre 7 et 16 s. */
+    var dureeLecture = function (msg) { return Math.min(16000, Math.max(7000, 4500 + msg.length * 70)); };
+    var message = function (el) { return el.getAttribute('data-' + langue()) || ''; };
+    var cartes = document.querySelectorAll('[data-bulle]');
+
+    /* Souris et stylet : survol et clavier (le toucher n'a pas de « sortie », il est traité plus bas). */
+    cartes.forEach(function (el) {
+      var sur = function () { courantEl = el; montrer(message(el), el.getAttribute('data-mood'), 9000); };
       var hors = function () { if (courantEl === el) { clearTimeout(minuterie); minuterie = setTimeout(cacher, 350); } };
-      el.addEventListener('pointerenter', sur);
-      el.addEventListener('pointerleave', hors);
-      el.addEventListener('focus', sur);
-      el.addEventListener('blur', hors);
+      el.addEventListener('pointerenter', function (e) { if (e.pointerType !== 'touch') sur(); });
+      el.addEventListener('pointerleave', function (e) { if (e.pointerType !== 'touch') hors(); });
+      el.addEventListener('focus', function () { if (el.matches(':focus-visible')) sur(); });
+      el.addEventListener('blur', function () { if (!tactile) hors(); });
     });
-    /* Bonjour discret : seulement sur grand écran, pour ne pas masquer les chiffres. */
-    if (window.innerWidth >= 900) {
+
+    if (tactile) {
+      var parler = function (el) {
+        var msg = message(el);
+        if (!msg) return;
+        courantEl = el;
+        montrer(msg, el.getAttribute('data-mood'), dureeLecture(msg));
+        if (vus.indexOf(el) < 0) vus.push(el);
+      };
+      /* Un toucher sur la carte (la capture, elle, ouvre l'agrandissement). */
+      cartes.forEach(function (el) {
+        el.addEventListener('click', function (e) { if (!e.target.closest('.media')) parler(el); });
+      });
+      /* Un toucher sur l'avatar : il commente ce qui est au centre de l'écran, sinon il redit bonjour. */
+      img.addEventListener('click', function () {
+        var c = document.elementFromPoint(window.innerWidth / 2, window.innerHeight / 2);
+        var el = c && c.closest('[data-bulle]');
+        if (el) parler(el);
+        else { var s = img.getAttribute('data-salut-touch-' + langue()); courantEl = null; montrer(s, 'idle', dureeLecture(s)); }
+      });
+      /* Un toucher sur la bulle (ou la croix) la ferme ; deux fermetures de suite : l'avatar arrête de parler tout seul. */
+      var fermer = function () { fermes++; cacher(); };
+      bulle.addEventListener('click', fermer);
+      if (croix) croix.addEventListener('click', function (e) { e.stopPropagation(); fermer(); });
+
+      if ('IntersectionObserver' in window) {
+        /* La carte qui couvre la ligne centrale de l'écran, restée 0,7 s, est commentée (une seule fois par visite). */
+        var attente = null, candidat = null;
+        var centre = new IntersectionObserver(function (entrees) {
+          entrees.forEach(function (e) {
+            if (e.isIntersecting) {
+              candidat = e.target; clearTimeout(attente);
+              attente = setTimeout(function () {
+                if (candidat !== e.target || fermes >= 2 || (zoom && zoom.open) || document.body.classList.contains('haut')) return;
+                if (vus.indexOf(e.target) >= 0) return;
+                parler(e.target);
+              }, 700);
+            } else if (candidat === e.target) { clearTimeout(attente); candidat = null; }
+          });
+        }, { rootMargin: '-46% 0px -46% 0px', threshold: 0 });
+        cartes.forEach(function (el) { centre.observe(el); });
+        /* Quand la carte commentée a quitté l'écran, la bulle s'efface après un court délai. */
+        var sortie = new IntersectionObserver(function (entrees) {
+          entrees.forEach(function (e) {
+            if (!e.isIntersecting && e.target === courantEl && !bulle.hidden) { clearTimeout(minuterie); minuterie = setTimeout(cacher, 1200); }
+          });
+        }, { threshold: 0 });
+        cartes.forEach(function (el) { sortie.observe(el); });
+      }
+      /* Première apparition de l'avatar, après l'en-tête : un mot pour dire comment l'utiliser. */
+      var salutFait = false;
+      new MutationObserver(function () {
+        if (salutFait || document.body.classList.contains('haut')) return;
+        salutFait = true;
+        setTimeout(function () { if (!courantEl && bulle.hidden) { var s = img.getAttribute('data-salut-touch-' + langue()); montrer(s, 'idle', dureeLecture(s)); } }, 900);
+      }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
+    } else if (window.innerWidth >= 900) {
+      /* Bonjour discret : seulement sur grand écran, pour ne pas masquer les chiffres. */
       setTimeout(function () { if (!courantEl) montrer(img.getAttribute('data-salut-' + langue()), 'idle', 5500); }, 1600);
     }
   }

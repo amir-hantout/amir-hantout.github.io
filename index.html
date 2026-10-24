@@ -106,16 +106,23 @@
       <button type="button" class="zoom-nav suiv" id="zoom-suiv" aria-label="Écran suivant">›</button>
     </div>
     <figcaption><span id="zoom-titre"></span><span class="zoom-compteur" id="zoom-compteur"></span></figcaption>
+    <p class="zoom-astuce"><span data-l="fr">Pincez pour zoomer, ou pivotez le téléphone.</span><span data-l="en">Pinch to zoom, or rotate your phone.</span></p>
     <div class="zoom-vignettes" id="zoom-vignettes"></div>
   </figure>
   <button type="button" class="fermer" id="zoom-fermer" aria-label="Fermer">✕</button>
 </dialog>
 
 <div class="avatar" id="avatar">
-  <div class="bulle" id="bulle" role="status" aria-live="polite" hidden><p id="bulle-texte"></p></div>
+  <div class="bulle" id="bulle" role="status" aria-live="polite" hidden>
+    <button type="button" class="bulle-x" id="bulle-x" aria-label="Fermer la bulle">✕</button>
+    <p id="bulle-texte"></p>
+    <span class="bulle-temps" id="bulle-temps" aria-hidden="true"></span>
+  </div>
   <img id="avatar-img" src="assets/avatar/idle.png" width="150" height="150" alt="" aria-hidden="true"
        data-salut-fr="Salut, c'est moi ! Passe la souris sur un projet pour que je t'en parle."
-       data-salut-en="Hi, it's me! Hover over a project and I'll tell you about it.">
+       data-salut-en="Hi, it's me! Hover over a project and I'll tell you about it."
+       data-salut-touch-fr="Salut ! Fais défiler : je commente chaque projet au passage. Touche-moi pour que je te parle de celui qui est à l'écran."
+       data-salut-touch-en="Hi! Keep scrolling: I comment on each project as it goes by. Tap me and I'll tell you about the one on screen.">
 </div>
 <script src="assets/app.js"></script>
 </body>
